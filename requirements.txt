@@ -1,3 +1,11 @@
-google-genai
+ollama
 pyttsx3
 python-dotenv
+streamlit
+pandas
+numpy
+openpyxl
+sounddevice
+scipy
+faster-whisper
+python-calamine
