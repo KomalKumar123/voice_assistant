@@ -1,5 +1,6 @@
 import datetime
 import streamlit as st
+import base64
 from speech.speech_to_text import SpeechToText
 from speech.text_to_speech import TextToSpeech
 from agent.road_agent import RoadAgent
@@ -12,12 +13,12 @@ def microphone_ui():
     Renders the voice + text query interface.
 
     Features:
-    - Voice recording with configurable duration slider
-    - Text input fallback
-    - Staged progress spinners (intent → code → narration)
-    - RoadQuery structured display
-    - TTS audio playback
-    - Double-fire prevention via session state flag
+    - Big centered circular voice button
+    - Hands-free recording with adaptive silence detection (stops after 3.5s of pause)
+    - Manual text input fallback
+    - Immediate transcription display
+    - Staged progress indicators (intent → code → narration)
+    - Audio output using a custom HTML element that pauses on any screen click/tap
     """
     if not st.session_state.get("file_uploaded", False):
         return
@@ -31,59 +32,59 @@ def microphone_ui():
         st.session_state.tts_engine = TextToSpeech()
 
     if "road_agent" not in st.session_state:
-        st.session_state.road_agent = RoadAgent()
+        try:
+            st.session_state.road_agent = RoadAgent()
+        except ValueError as e:
+            st.error(f"⚠️ **LLM Initialization Failed**: {str(e)}")
+            st.info("Please check that your API key is configured correctly in the `.env` file.")
+            return
+        except Exception as e:
+            st.error(f"⚠️ **Error initializing RoadAgent**: {str(e)}")
+            return
 
     # ── Query input panel ─────────────────────────────────────────────────────
     st.markdown(
         """
         <div class="glass-card">
             <div style="font-size:0.8rem; font-weight:600; color:#8b949e;
-                        text-transform:uppercase; letter-spacing:0.08em; margin-bottom:0.8rem;">
-                🎙️ Ask Your Question
+                        text-transform:uppercase; letter-spacing:0.08em; margin-bottom:0.8rem; text-align:center;">
+                🎙️ Ask Your Question (Voice or Text)
             </div>
         """,
         unsafe_allow_html=True,
     )
 
-    col_voice, col_text = st.columns([1, 2])
-
+    # Centered circular mic button
+    col_l, col_c, col_r = st.columns([1, 1, 1])
     question = ""
 
-    with col_voice:
-        duration = st.slider(
-            "Recording duration (s)",
-            min_value=3,
-            max_value=20,
-            value=7,
-            key="duration_slider",
-            help="How many seconds to record your voice",
-        )
-
-        if st.button("🎤 Start Listening", use_container_width=True, key="mic_btn"):
-            # Guard against double-fire on rerender
+    with col_c:
+        st.markdown('<div class="big-mic-container">', unsafe_allow_html=True)
+        if st.button("🎤", key="big_mic_btn", use_container_width=True, help="Click and start speaking — stops recording automatically after 3-4s of silence"):
             st.session_state["_mic_active"] = True
+        st.markdown('</div>', unsafe_allow_html=True)
 
-        if st.session_state.pop("_mic_active", False):
-            stt = st.session_state.stt_engine
-            with st.spinner(f"🎙️ Recording for {duration} seconds… speak now!"):
-                audio_file = stt.record_audio(duration=duration)
-            with st.spinner("📝 Transcribing…"):
-                question = stt.transcribe(audio_file)
-            if question.strip():
-                st.session_state["_pending_question"] = question
-                st.info(f"🗣️ Heard: *{question}*")
-            else:
-                st.warning("⚠️ No speech detected. Please try again.")
+    if st.session_state.pop("_mic_active", False):
+        stt = st.session_state.stt_engine
+        with st.spinner("🎙️ Listening... speak now! (Recording stops automatically after 3s of silence)"):
+            audio_file = stt.record_until_silence(silence_seconds=3.5)
+        with st.spinner("📝 Transcribing your speech…"):
+            question = stt.transcribe(audio_file)
+        if question.strip():
+            st.session_state["_pending_question"] = question
+            st.success(f"🗣️ Heard: *\"{question}\"*")
+        else:
+            st.warning("⚠️ No speech detected. Please try again.")
 
-    with col_text:
-        manual_input = st.text_input(
-            "Or type your question:",
-            placeholder="e.g. What is the maximum rut depth on Road A in July?",
-            key="manual_input",
-            label_visibility="collapsed",
-        )
-        if manual_input.strip():
-            st.session_state["_pending_question"] = manual_input.strip()
+    # Manual text input below
+    manual_input = st.text_input(
+        "Or type your question here:",
+        placeholder="e.g., Which road has the highest roughness in Jul-24?",
+        key="manual_input",
+        label_visibility="visible",
+    )
+    if manual_input.strip():
+        st.session_state["_pending_question"] = manual_input.strip()
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -101,8 +102,7 @@ def _run_pipeline(question: str):
     dataset_store = DataFrameStore.get_dataset_store()
     metadata      = DataFrameStore.get_metadata()
 
-    # ── Stage 1: Intent parsing ───────────────────────────────────────────────
-    response = None
+    # ── Stage 1: Processing indicators ─────────────────────────────────────────
     pipeline_status = st.empty()
 
     with pipeline_status.container():
@@ -110,7 +110,7 @@ def _run_pipeline(question: str):
             """
             <div class="glass-card" style="padding:1rem 1.2rem;">
                 <div style="color:#8b949e; font-size:0.82rem;">
-                    ⏳ <strong>Step 1/3</strong> — Parsing intent…
+                    ⏳ Running analysis pipeline...
                 </div>
             </div>
             """,
@@ -118,8 +118,6 @@ def _run_pipeline(question: str):
         )
 
     try:
-        # We run the whole agent.answer() call — it handles all 3 steps internally.
-        # Show staged feedback via placeholder updates.
         pipeline_status.empty()
 
         col_prog1, col_prog2, col_prog3 = st.columns(3)
@@ -132,7 +130,7 @@ def _run_pipeline(question: str):
         prog3.empty()
 
         # Actually run the full pipeline
-        with st.spinner("🔍 Analyzing dataset — this may take 15–30 seconds…"):
+        with st.spinner("🔍 Analyzing dataset — this may take 10–20 seconds…"):
             response = agent.answer(question, dataset_store, metadata)
 
         prog1.success("✅ Intent parsed")
@@ -152,7 +150,7 @@ def _run_pipeline(question: str):
                             text-transform:uppercase; letter-spacing:0.08em; margin-bottom:0.5rem;">
                     🤖 Assistant Response
                 </div>
-                <div style="font-size:1rem; color:#e6edf3; line-height:1.6;">
+                <div id="response-text" style="font-size:1rem; color:#e6edf3; line-height:1.6;">
                     {response["final_answer"]}
                 </div>
                 <div style="font-size:0.68rem; color:#484f58; margin-top:0.6rem;">
@@ -164,22 +162,20 @@ def _run_pipeline(question: str):
         )
 
         # ── Collapsible details ───────────────────────────────────────────────
-        with st.expander("🔍 RoadQuery (Parsed Intent)", expanded=False):
+        with st.expander("🔍 RoadQuery (Parsed Parameters)", expanded=False):
             rq = asdict(response["road_query"])
-            # Pretty-print key fields
             st.markdown(
                 f"""
                 <div class="intent-card">
-                    <div class="intent-label">Structured RoadQuery</div>
-                    <b>Intent:</b> {rq.get("intent")} &nbsp;|&nbsp;
-                    <b>Type:</b> {rq.get("analysis_type")} &nbsp;|&nbsp;
-                    <b>Metric:</b> {rq.get("primary_metric") or "—"} &nbsp;|&nbsp;
-                    <b>Op:</b> {rq.get("operation") or "—"} &nbsp;|&nbsp;
-                    <b>Top-K:</b> {rq.get("top_k")}
+                    <div class="intent-label">Structured Search Parameters</div>
+                    <b>Metric:</b> {rq.get("metric") or "any"} &nbsp;|&nbsp;
+                    <b>Operation:</b> {rq.get("operation") or "list"} &nbsp;|&nbsp;
+                    <b>Lane:</b> {rq.get("lane") or "any"} &nbsp;|&nbsp;
+                    <b>Road:</b> {rq.get("road_name") or "any"} &nbsp;|&nbsp;
+                    <b>Survey Month:</b> {rq.get("survey_period") or "any"}
                     <br><br>
-                    <b>Roads:</b> {", ".join(rq.get("road_identifiers") or []) or "all"} &nbsp;|&nbsp;
-                    <b>Periods:</b> {", ".join(rq.get("time_periods") or []) or "all"} &nbsp;|&nbsp;
-                    <b>Grouping:</b> {rq.get("grouping") or "—"}
+                    <b>Chainage Range:</b> {rq.get("chainage_start") or "0"} to {rq.get("chainage_end") or "Max"} &nbsp;|&nbsp;
+                    <b>Top-K:</b> {rq.get("top_k", 1)}
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -190,12 +186,39 @@ def _run_pipeline(question: str):
             st.caption("Raw execution result:")
             st.write(response.get("raw_result"))
 
-        # ── TTS playback ──────────────────────────────────────────────────────
+        # ── TTS playback with Tap-To-Stop screen listener ─────────────────────
         with st.spinner("🔊 Synthesizing voice response…"):
             try:
                 tts = st.session_state.tts_engine
                 audio_path = tts.speak(response["final_answer"])
-                st.audio(audio_path, autoplay=True)
+                
+                # Base64 embed the audio file so we can run a custom JavaScript listener
+                with open(audio_path, "rb") as f:
+                    audio_bytes = f.read()
+                audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+                
+                # Embed the audio player + a listener on both the local iframe and parent window
+                audio_html = f"""
+                <audio id="tts-audio" src="data:audio/wav;base64,{audio_b64}" autoplay></audio>
+                <script>
+                    const stopTTSAudio = () => {{
+                        const audio = document.getElementById("tts-audio");
+                        if (audio) {{
+                            audio.pause();
+                            audio.currentTime = 0;
+                            console.log("TTS playback stopped on tap.");
+                        }}
+                    }};
+                    // Listen to clicks inside the component iframe
+                    window.addEventListener('click', stopTTSAudio);
+                    
+                    // Listen to clicks on the parent Streamlit container document
+                    if (window.parent) {{
+                        window.parent.document.addEventListener('click', stopTTSAudio);
+                    }}
+                </script>
+                """
+                st.components.v1.html(audio_html, height=0)
             except Exception as e:
                 st.warning(f"⚠️ TTS unavailable: {str(e)}")
 

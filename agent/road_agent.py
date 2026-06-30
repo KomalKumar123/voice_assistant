@@ -8,7 +8,9 @@ from llm.base_model import BaseLLM
 from llm.llm_factory import LLMFactory
 from llm.prompts import CODE_GENERATION_PROMPT, NARRATION_PROMPT, RETRY_PROMPT
 from tools.code_executor import CodeExecutor
+from tools.query_engine import DeterministicQueryEngine
 from data.schema_formatter import SchemaFormatter
+from data.dataframe_store import DataFrameStore
 from nlp.intent_parser import IntentParser
 from config.settings import TEMP_FOLDER, LOGS_FOLDER, MAX_RETRIES, LLM_PROVIDER
 
@@ -26,11 +28,11 @@ class RoadAgent:
     def answer(self, question: str, dataset_store: dict, metadata: dict) -> dict:
         """
         Statelessly processes a natural language question through the full pipeline:
-            1. Intent Parsing    → RoadQuery
-            2. Schema Formatting → schema string for LLM
-            3. Code Generation   → Python pandas code
-            4. Code Execution    → analytical result (with retry loop)
-            5. Narration         → natural language answer
+            1. Intent Parsing    → RoadQuery (simplified)
+            2. Flat Schema Format→ schema string of flat_df
+            3. Deterministic query attempt
+            4. Sandbox code-gen fallback (only if deterministic bypasses)
+            5. Narration         → spoken language narration
 
         Args:
             question      (str):  User's natural language question.
@@ -47,55 +49,68 @@ class RoadAgent:
         road_query      = self.intent_parser.parse(question)
         road_query_json = json.dumps(asdict(road_query), indent=2)
 
-        # --- Step 2: Format schema ---
-        schema_str = SchemaFormatter.format_schema(metadata)
+        # --- Step 2: Format flat schema ---
+        flat_df = DataFrameStore.generate_flat_df()
+        schema_str = SchemaFormatter.format_flat_schema(flat_df)
 
-        # --- Step 3 & 4: Code generation + execution loop ---
-        system_prompt = CODE_GENERATION_PROMPT.format(
-            schema=schema_str,
-            road_query_json=road_query_json,
-        )
-        user_prompt = (
-            f"Generate the pandas Python code to answer this question: {question}"
-        )
-
-        last_code   = ""
+        # --- Step 3: Attempt deterministic execution first ---
+        last_code = "# Query executed via DeterministicQueryEngine"
         last_result = None
         last_stdout = ""
-        success     = False
+        success = False
 
-        for attempt in range(MAX_RETRIES):
-            try:
-                llm_response = self.llm.generate(system_prompt, user_prompt)
-                code         = self._extract_code(llm_response)
-                last_code    = code
+        if road_query.metric != "any" or road_query.operation != "list":
+            engine_result = DeterministicQueryEngine.execute(road_query, flat_df)
+            if engine_result["success"]:
+                last_result = engine_result["result"]
+                last_stdout = engine_result.get("summary", "")
+                success = True
+                print("RoadAgent: Query successfully executed via DeterministicQueryEngine.")
 
-                self._save_generated_code(code)
+        # --- Step 4: Fallback to Code generation sandbox if deterministic bypassed/failed ---
+        if not success:
+            print("RoadAgent: Deterministic execution failed or was bypassed. Falling back to Code Generation.")
+            system_prompt = CODE_GENERATION_PROMPT.format(
+                schema=schema_str,
+                road_query_json=road_query_json,
+            )
+            user_prompt = (
+                f"Generate the pandas Python code to answer this question: {question}"
+            )
 
-                exec_result = CodeExecutor.execute_python(code, dataset_store, metadata)
+            for attempt in range(MAX_RETRIES):
+                try:
+                    llm_response = self.llm.generate(system_prompt, user_prompt)
+                    code         = self._extract_code(llm_response)
+                    last_code    = code
 
-                if exec_result["success"]:
-                    last_result = exec_result["result"]
-                    last_stdout = exec_result["stdout"]
-                    success     = True
-                    break
-                else:
-                    tb          = exec_result["traceback"] or exec_result["error"] or "Unknown error"
-                    # On retry: rebuild prompt with error context + schema reminder
-                    user_prompt = RETRY_PROMPT.format(
-                        code=code,
-                        traceback=tb,
-                        schema=schema_str,
+                    self._save_generated_code(code)
+
+                    exec_result = CodeExecutor.execute_python(code, dataset_store, metadata)
+
+                    if exec_result["success"]:
+                        last_result = exec_result["result"]
+                        last_stdout = exec_result["stdout"]
+                        success     = True
+                        break
+                    else:
+                        tb          = exec_result["traceback"] or exec_result["error"] or "Unknown error"
+                        # On retry: rebuild prompt with error context + schema reminder
+                        user_prompt = RETRY_PROMPT.format(
+                            code=code,
+                            traceback=tb,
+                            schema=schema_str,
+                        )
+                        system_prompt = CODE_GENERATION_PROMPT.format(
+                            schema=schema_str,
+                            road_query_json=road_query_json,
+                        )
+
+                except Exception as e:
+                    user_prompt = (
+                        f"Code generation raised an exception: {str(e)}. "
+                        "Correct the code and try again."
                     )
-                    system_prompt = CODE_GENERATION_PROMPT.format(
-                        schema=schema_str,
-                        road_query_json=road_query_json,
-                    )
-            except Exception as e:
-                user_prompt = (
-                    f"Code generation raised an exception: {str(e)}. "
-                    "Correct the code and try again."
-                )
 
         # --- Step 5: Narration ---
         if success:

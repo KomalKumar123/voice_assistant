@@ -75,17 +75,15 @@ def chat_ui():
                 st.markdown(
                     f"""
                     <div class="intent-card">
-                        <div class="intent-label">RoadQuery</div>
-                        <b>Intent:</b> {rq.get("intent")} &nbsp;|&nbsp;
-                        <b>Type:</b> {rq.get("analysis_type")} &nbsp;|&nbsp;
-                        <b>Metric:</b> {rq.get("primary_metric") or "—"} &nbsp;|&nbsp;
-                        <b>Operation:</b> {rq.get("operation") or "—"} &nbsp;|&nbsp;
-                        <b>Top-K:</b> {rq.get("top_k", 1)}
+                        <div class="intent-label">Search Parameters</div>
+                        <b>Metric:</b> {rq.get("metric") or "any"} &nbsp;|&nbsp;
+                        <b>Operation:</b> {rq.get("operation") or "list"} &nbsp;|&nbsp;
+                        <b>Lane:</b> {rq.get("lane") or "any"} &nbsp;|&nbsp;
+                        <b>Road:</b> {rq.get("road_name") or "any"} &nbsp;|&nbsp;
+                        <b>Survey Month:</b> {rq.get("survey_period") or "any"}
                         <br><br>
-                        <b>Road IDs:</b>  {", ".join(rq.get("road_identifiers") or []) or "all"} &nbsp;|&nbsp;
-                        <b>Periods:</b>   {", ".join(rq.get("time_periods") or []) or "all"} &nbsp;|&nbsp;
-                        <b>Grouping:</b>  {rq.get("grouping") or "—"} &nbsp;|&nbsp;
-                        <b>Filters:</b>   {rq.get("filters") or "none"}
+                        <b>Chainage Range:</b> {rq.get("chainage_start") or "0"} to {rq.get("chainage_end") or "Max"} &nbsp;|&nbsp;
+                        <b>Top-K:</b> {rq.get("top_k", 1)}
                     </div>
                     """,
                     unsafe_allow_html=True,

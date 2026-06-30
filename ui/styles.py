@@ -419,6 +419,41 @@ def inject_styles():
             border-radius: var(--radius-sm);
             margin-top: 0.4rem;
         }
+
+        /* ============================================================
+           BIG MIC BUTTON Styling
+        ============================================================ */
+        .big-mic-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin: 1.5rem 0;
+        }
+        .big-mic-container button {
+            height: 120px !important;
+            width: 120px !important;
+            border-radius: 50% !important;
+            font-size: 3rem !important;
+            line-height: 120px !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            margin: 0 auto !important;
+            background: linear-gradient(135deg, #2ea043, #3fb950) !important;
+            box-shadow: 0 0 25px rgba(46, 160, 67, 0.5) !important;
+            border: none !important;
+            color: white !important;
+            cursor: pointer !important;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+        }
+        .big-mic-container button:hover {
+            transform: scale(1.08) !important;
+            box-shadow: 0 0 40px rgba(46, 160, 67, 0.8) !important;
+            background: linear-gradient(135deg, #3fb950, #4fcf60) !important;
+        }
+        .big-mic-container button:active {
+            transform: scale(0.95) !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,

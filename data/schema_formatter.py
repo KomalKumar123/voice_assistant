@@ -65,3 +65,52 @@ class SchemaFormatter:
             output.append("")  # blank line between datasets
 
         return "\n".join(output).strip()
+
+    @staticmethod
+    def format_flat_schema(flat_df) -> str:
+        """
+        Formats a schema description of the flat DataFrame for LLM consumption,
+        detailing the columns, data types, numeric summaries, and sample values.
+        """
+        import pandas as pd
+        if flat_df.empty:
+            return "No active data."
+
+        output = []
+        rows, cols = flat_df.shape
+        output.append(f"=== Unified DataFrame `flat_df` ({rows} rows × {cols} columns) ===")
+        output.append("Columns:")
+
+        for col in flat_df.columns:
+            col_str = str(col)
+            dtype = str(flat_df[col].dtype)
+            
+            # Extract samples (first 3 non-null)
+            non_null = flat_df[col].dropna()
+            samples = non_null.head(3).tolist()
+            sample_vals = [
+                str(v) if not isinstance(v, (int, float, bool)) else v
+                for v in samples
+            ]
+            
+            line = f"  - '{col_str}' [{dtype}]"
+            
+            # Extract numeric stats if relevant
+            if pd.api.types.is_numeric_dtype(flat_df[col]):
+                if not non_null.empty:
+                    try:
+                        min_v = round(float(non_null.min()), 4)
+                        max_v = round(float(non_null.max()), 4)
+                        mean_v = round(float(non_null.mean()), 4)
+                        line += f"  min={min_v}, max={max_v}, mean={mean_v}"
+                    except Exception:
+                        pass
+                        
+            if sample_vals:
+                sample_str = ", ".join(str(s) for s in sample_vals)
+                line += f"  samples=[{sample_str}]"
+                
+            output.append(line)
+
+        return "\n".join(output)
+

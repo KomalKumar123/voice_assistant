@@ -54,6 +54,7 @@ class CodeExecutor:
         import numpy as np     # noqa: PLC0415
         import datetime as dt  # noqa: PLC0415
         import json as _json   # noqa: PLC0415
+        from data.dataframe_store import DataFrameStore
 
         exec_globals = {
             "pd":           pd,
@@ -61,9 +62,11 @@ class CodeExecutor:
             "datetime":     dt,
             "json":         _json,
             "dataset_store": dataset_store,
+            "flat_df":      DataFrameStore.generate_flat_df(),
             "metadata":     metadata or {},
         }
         exec_locals = {"result": None}
+
 
         # --- Capture stdout ---
         stdout_capture = io.StringIO()

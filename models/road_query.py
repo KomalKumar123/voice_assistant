@@ -1,18 +1,15 @@
-from dataclasses import dataclass, field
-from typing import List, Optional
+from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass
 class RoadQuery:
-    intent: str
-    analysis_type: str  # e.g., "ranking", "comparison", "trend", "anomaly", "aggregation"
-    primary_metric: Optional[str] = None
-    secondary_metrics: List[str] = field(default_factory=list)
-    operation: Optional[str] = None
+    metric: str           # "roughness" | "rut_depth" | "cracking" | "potholes" | "any"
+    operation: str        # "max" | "min" | "mean" | "sum" | "count" | "list"
+    lane: str             # "L1" | "L2" | "R3" etc., or "any"
+    road_name: str        # e.g. "Highway Alpha", or "any"
+    survey_period: str    # e.g. "Mar-25", or "any"
+    chainage_start: Optional[float] = None
+    chainage_end: Optional[float] = None
     top_k: int = 1
-    grouping: Optional[str] = None
-    filters: List[dict] = field(default_factory=list)
-    comparison_targets: List[str] = field(default_factory=list)
-    road_identifiers: List[str] = field(default_factory=list)
-    time_periods: List[str] = field(default_factory=list)
-    chainage_range: Optional[str] = None
+

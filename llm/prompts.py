@@ -10,34 +10,45 @@
 #    First LLM call: natural language → structured RoadQuery JSON
 # -----------------------------------------------------------------------------
 INTENT_PARSER_SYSTEM_PROMPT = """\
-You are an Intent Parser for a Road Asset Management Voice Assistant.
-Convert the user's question into a compact JSON object. Output ONLY the JSON. No markdown, no explanation.
+You are an expert Query Parameter Extractor for a Highway Asset Management System.
+Analyze the user's natural language question and extract the query parameters as a clean JSON object.
 
-FIELD REFERENCE (only include fields that are relevant — omit null/empty ones):
-  intent:             "ranking"|"aggregation"|"comparison"|"trend"|"violation"|"general"
-  analysis_type:      "ranking"|"comparison"|"trend"|"anomaly"|"aggregation"
-  primary_metric:     "rut_depth"|"roughness"|"cracking"|"ravelling"|"potholes"|"overall_damage"|"ca_violation"
-  operation:          "max"|"min"|"avg"|"sum"|"count"
-  top_k:              integer (only if user asks for top/bottom N, default omit)
-  grouping:           "lane"|"chainage"|"month"|"road"
-  filters:            [{{"column":str,"operator":str,"value":any}}]
-  comparison_targets: [str]
-  road_identifiers:   [str]
-  time_periods:       [str]
-  chainage_range:     "start-end"
+JSON SCHEMA:
+{{
+  "metric": "roughness" | "rut_depth" | "cracking" | "potholes" | "any",
+  "operation": "max" | "min" | "mean" | "sum" | "count" | "list",
+  "lane": "L1" | "L2" | "L3" | "L4" | "R1" | "R2" | "R3" | "R4" | "any",
+  "road_name": "string road name" | "any",
+  "survey_period": "string month/year" | "any",
+  "chainage_start": number | null,
+  "chainage_end": number | null,
+  "top_k": integer
+}}
 
 SYNONYM MAP (map user words to metric keys):
-{road_concepts}
+- roughness: "roughness", "iri", "bi", "bump integrator", "international roughness index"
+- rut_depth: "rutting", "rut depth", "rut"
+- cracking: "cracks", "cracking", "crack", "ravelling", "raveling"
+- potholes: "potholes", "pothole", "pothole area", "depression"
 
-Available roads: {available_roads}
-Available survey sheets: {available_months}
+ROAD NAMES REGISTRY:
+{available_roads}
+
+SURVEY PERIODS REGISTRY:
+{available_months}
 
 RULES:
-1. ONLY include fields that have a real value. Skip null, [], and omitted fields entirely.
-2. Always include "intent" and "primary_metric" if a metric is mentioned.
-3. For top-N queries set top_k. For comparisons set comparison_targets.
-4. Respond with ONLY the minimal JSON object.\
+1. "metric": Choose the closest matching key from the synonym map. If no specific metric is mentioned, output "any".
+2. "operation": If asking for highest/maximum/worst, output "max". If asking for lowest/minimum/best, output "min". If asking for average, output "mean". If asking to list or show rows, output "list".
+3. "lane": If a specific lane (like L1, R3, etc.) is mentioned, extract it. Otherwise, output "any".
+4. "road_name": Match against the ROAD NAMES REGISTRY. Output "any" if none match.
+5. "survey_period": Match against the SURVEY PERIODS REGISTRY (e.g. "Mar-25", "Jul-24"). Output "any" if none match.
+6. "chainage_start" and "chainage_end": Extract any numerical chainages mentioned (e.g., "between 247200 and 247300" -> start=247200, end=247300).
+7. "top_k": Output the integer if they ask for "top N" or "worst 5", otherwise default to 1.
+
+OUTPUT ONLY THE RAW JSON OBJECT. DO NOT OUTPUT MARKDOWN OR THINKING BLOCKS.
 """
+
 
 
 # -----------------------------------------------------------------------------
@@ -46,36 +57,16 @@ RULES:
 # -----------------------------------------------------------------------------
 CODE_GENERATION_PROMPT = """\
 You are a Highway Asset Management Data Analyst.
-You translate a structured RoadQuery into Python pandas code that queries a hierarchical in-memory dataset store.
-You NEVER answer from memory — you ALWAYS read from the DataFrames in dataset_store.
+You translate a structured RoadQuery into Python pandas code that queries a unified flat DataFrame named `flat_df`.
+You NEVER answer from memory — you ALWAYS query from `flat_df`.
 
-=== Dataset Store Structure ===
-dataset_store is a Python dict with this shape:
-{{
-    "dataset_1": {{
-        "name":   "Road_A",
-        "sheets": {{
-            "Jul-24": <pandas DataFrame>,
-            "Mar-25": <pandas DataFrame>
-        }}
-    }},
-    "dataset_2": {{
-        "name":   "Road_B",
-        "sheets": {{
-            "Jul-24": <pandas DataFrame>
-        }}
-    }}
-}}
+=== Unified Flat DataFrame `flat_df` ===
+The data from all uploaded sheets in the dataset store is compiled into a single flat DataFrame named `flat_df`.
+Every row represents a survey stretch on a road. Standard columns have been added to help you filter:
+- 'road_name'      : string (e.g., "Road A", "Road B") - matches road name / dataset name.
+- 'survey_period'  : string (e.g., "Jul-24", "Mar-25") - matches survey month / sheet name.
 
-To access a specific sheet:
-    df = dataset_store["dataset_1"]["sheets"]["Jul-24"]
-
-To iterate all datasets:
-    for ds_id, ds in dataset_store.items():
-        name   = ds["name"]
-        sheets = ds["sheets"]   # dict of sheet_name -> DataFrame
-
-=== Available Data Schema ===
+=== Available Data Schema (Columns, Types, and Stats) ===
 {schema}
 
 === RoadQuery (what to compute) ===
@@ -83,17 +74,16 @@ To iterate all datasets:
 
 === Code Generation Rules ===
 1. Write ONLY valid Python code inside a ```python ... ``` code block.
-2. No imports — pd (pandas) and np (numpy) are already available.
-3. The variable `dataset_store` is already available — do not redefine it.
-4. The variable `metadata` is also available if you need schema info at runtime.
-5. ALWAYS assign the final answer to a variable named `result`.
-   Example: result = df["Rut Depth"].max()
-6. Use EXACT column names from the schema above — do not guess.
-7. Convert numeric columns with pd.to_numeric(df[col], errors="coerce") before math ops.
-8. For comparisons across multiple roads, iterate dataset_store and match by name.
-9. Handle NaN values gracefully (use .dropna() or .fillna(0) where appropriate).
-10. For top-K queries, use .nlargest(k) or .nsmallest(k).
-11. Do NOT use print() — put the final answer in `result`.\
+2. DO NOT USE IMPORT STATEMENTS. pandas (as pd) and numpy (as np) are already imported and in scope. Using `import` or `from ... import` will trigger a security block.
+3. The variable `flat_df` is already available — do not redefine it.
+4. ALWAYS assign the final answer to a variable named `result`.
+   Example: result = flat_df.loc[flat_df["road_name"] == "Road A", "Rut Depth"].max()
+5. Use EXACT column names from the schema above — do not guess.
+6. Convert numeric columns with pd.to_numeric(flat_df[col], errors="coerce") before mathematical operations.
+7. Filter by 'road_name' and/or 'survey_period' when specific roads or periods are requested in the RoadQuery.
+8. Handle NaN values gracefully (use .dropna() or .fillna(0) where appropriate).
+9. For top-K queries, use .nlargest(k) or .nsmallest(k) on the filtered/grouped data.
+10. Do NOT use print() — put the final answer in `result`.\
 """
 
 
@@ -145,6 +135,7 @@ Analyze the error, correct the problem, and generate new working code.
 
 Rules:
 - Check for typos in column or sheet names — use the exact names from the schema.
+- Do NOT use import statements. pandas (as pd) and numpy (as np) are already imported and available in the execution environment.
 - Ensure numeric operations use pd.to_numeric(..., errors="coerce").
 - ALWAYS assign the final answer to `result`.
 - Output ONLY the corrected Python code in a ```python ... ``` block. No other text.\
